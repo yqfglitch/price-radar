@@ -87,7 +87,7 @@ def fetch_detailed_comparison_data(image_url):
     return []
 
 def generate_comparison_report(raw_matches, category):
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-3-flash-preview')
     data_context = json.dumps(raw_matches, indent=2)
     
     # 🌟 修改了 Prompt，强制 AI 输出中英双语报告
