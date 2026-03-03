@@ -7,11 +7,9 @@ import time
 # ==========================================
 # 🔒 专属密码保护拦截 (防白嫖机制 / Anti-freeloader lock)
 # ==========================================
-# 检查 session 状态 / Check session state
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 
-# 如果没有登录，则显示密码输入框 / Show password input if not logged in
 if not st.session_state["logged_in"]:
     st.title("🔒 访问受限 / Access Restricted")
     st.markdown("这是私人专属的比价雷达，需要输入密码才能使用。 \n\n*This is a private pricing radar. Please enter the password to access.*")
@@ -39,6 +37,16 @@ genai.configure(api_key=GEMINI_API_KEY.strip())
 # ==========================================
 # 🌐 核心功能函数 / Core Functions
 # ==========================================
+@st.cache_data(ttl=3600) # 缓存1小时，避免频繁调用汇率接口
+def fetch_live_exchange_rates():
+    """获取真实实时汇率 (基础货币: USD)"""
+    try:
+        res = requests.get("https://open.er-api.com/v6/latest/USD", timeout=10).json()
+        return res.get("rates", {})
+    except Exception as e:
+        st.warning(f"⚠️ 实时汇率获取失败，将依赖 AI 内部估算。({e})")
+        return {}
+
 def upload_to_imgbb(image_bytes):
     try:
         url = "https://api.imgbb.com/1/upload"
@@ -86,22 +94,31 @@ def fetch_detailed_comparison_data(image_url):
         st.error(f"搜索失败 / Search failed: {e}")
     return []
 
-def generate_comparison_report(raw_matches, category):
+def generate_comparison_report(raw_matches, category, rates):
     model = genai.GenerativeModel('gemini-3-flash-preview')
     data_context = json.dumps(raw_matches, indent=2)
     
-    # 🌟 修改了 Prompt，强制 AI 输出中英双语报告
+    # 提取几个核心汇率传给 AI
+    jpy_rate = rates.get("JPY", 150.0)
+    eur_rate = rates.get("EUR", 0.92)
+    gbp_rate = rates.get("GBP", 0.78)
+    cny_rate = rates.get("CNY", 7.2)
+    
     prompt = f"""
     Role: Senior E-commerce Pricing Analyst.
     Current Task: Compare prices for an item declared as: *** {category} ***.
 
     [DATA]: {data_context}
+    
+    [LIVE EXCHANGE RATES (1 USD equals)]:
+    JPY: {jpy_rate}, EUR: {eur_rate}, GBP: {gbp_rate}, CNY: {cny_rate}
 
     [STRICT RULES]:
     1. Filter results that best match the "{category}" attribute.
     2. Group results clearly into US Local and Global Matches.
     3. You MUST pick the SINGLE most cost-effective/available link for US, and one for Global. Provide the direct URL.
-    4. Separate the Expert Summary and the final Pricing Suggestion into two distinct sections.
+    4. EVALUATE VALUE IN USD: For all foreign prices, use the provided LIVE EXCHANGE RATES to calculate their exact USD value before comparing which one is the "best deal". 
+    5. CURRENCY DISPLAY FORMAT: In the report, you MUST display the original foreign price, followed immediately by its converted USD amount in parentheses. Example: "¥15,000 (~$100.00 USD)".
 
     [REPORT FORMAT - BILINGUAL (CHINESE & ENGLISH)]:
     # 📊 全球视觉比价雷达报告 / Global Visual Pricing Radar Report 
@@ -112,7 +129,7 @@ def generate_comparison_report(raw_matches, category):
     **🛒 最划算推荐 / Best Deal Link**: [Provide direct link and 1 sentence reason in both EN & CN]
     
     ## 🌍 全球境外参考 / Global Matches
-    [List...]
+    [List... MUST use format: Original Price (~$Converted USD)]
     **🛒 境外最划算推荐 / Best Global Deal Link**: [Provide direct link and 1 sentence reason in both EN & CN]
     
     ## 📦 跨境物流提示 / International Shipping Est.
@@ -145,7 +162,7 @@ def generate_comparison_report(raw_matches, category):
 st.set_page_config(page_title="Global Pricing Radar", page_icon="🔍", layout="wide")
 
 st.title("🔍 全球视觉比价雷达 / Global Visual Pricing Radar")
-st.markdown("上传一张古董或二手商品的图片，AI 将通过 Google Lens 扫描全球全网，为您提供精算的定价和进货建议。 \n\n*Upload an image of a vintage or used item, and our AI will scan the global web via Google Lens to provide calculated pricing and sourcing suggestions.*")
+st.markdown("上传一张古董或二手商品的图片，AI 将结合**实时全球汇率**进行精准比价及进货建议。 \n\n*Upload an image, and our AI will provide calculated pricing using **Live Global Exchange Rates**.*")
 
 col1, col2 = st.columns([1, 2])
 
@@ -156,7 +173,7 @@ with col1:
         ["Vintage (中古/年代物)", "Antique (古董/百年以上)", "New (全新)", "Used (普通二手)"]
     )
     
-    uploaded_file = st.file_uploader("📸 拖拽或选择上传图片 / Drag & Drop or Browse Image", type=["jpg", "jpeg", "png"])
+    uploaded_file = st.file_uploader("📸 拖拽或选择上传图片 / Drag & Drop Image", type=["jpg", "jpeg", "png"])
     
     if uploaded_file is not None:
         st.image(uploaded_file, caption="待查商品图片 / Image to analyze", use_column_width=True)
@@ -167,20 +184,23 @@ with col2:
     if uploaded_file is not None:
         if st.button("🚀 启动全网雷达扫描 / Start Global Radar Scan", use_container_width=True):
             
-            with st.spinner('步骤 1/3: 正在将图片上传至服务器... / Step 1/3: Uploading image to server...'):
+            # 提前抓取实时汇率
+            live_rates = fetch_live_exchange_rates()
+            
+            with st.spinner('步骤 1/3: 正在将图片上传至服务器... / Step 1/3: Uploading image...'):
                 img_bytes = uploaded_file.getvalue()
                 img_url = upload_to_imgbb(img_bytes)
                 
             if img_url:
-                with st.spinner('步骤 2/3: Google Lens 正在进行全网比对... / Step 2/3: Google Lens is scanning the web...'):
+                with st.spinner('步骤 2/3: Google Lens 正在进行全网比对... / Step 2/3: Google Lens scanning...'):
                     matches = fetch_detailed_comparison_data(img_url)
                     
                 if matches:
-                    with st.spinner('步骤 3/3: AI 正在构建定价模型... / Step 3/3: AI is building the pricing model...'):
-                        report = generate_comparison_report(matches, selected_category)
+                    with st.spinner('步骤 3/3: AI 正在拉取实时汇率并精算定价... / Step 3/3: AI calculating with live exchange rates...'):
+                        report = generate_comparison_report(matches, selected_category, live_rates)
                         st.success("✅ 分析完成！ / Analysis Complete!")
                         st.markdown(report)
                 else:
-                    st.warning("⚠️ 未能找到高度匹配的结果，请尝试更清晰的图片。 / No highly matched results found. Please try a clearer image.")
+                    st.warning("⚠️ 未能找到高度匹配的结果，请尝试更清晰的图片。 / No highly matched results found.")
     else:
-        st.info("👈 请先在左侧上传商品图片以启动分析。 / Please upload an image on the left to start the analysis.")
+        st.info("👈 请先在左侧上传商品图片以启动分析。 / Please upload an image on the left.")
