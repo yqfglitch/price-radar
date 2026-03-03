@@ -5,11 +5,11 @@ import json
 import time
 
 # ==========================================
-# 🔑 API 配置 (注意：公开部署后建议将Key移至Secret)
+# 🔑 API 配置 (使用 Streamlit Secrets 保护隐私)
 # ==========================================
-GEMINI_API_KEY = st.secrets["AIzaSyCqvYVGVn6P76jFVp2E_Bw09rSsUlJqxII"]
-SERPAPI_KEY = st.secrets["ee909b38e5e17ac878d56f25d9316d11eb7e77f16ffed88db232af57a9d0ede1"]
-IMGBB_API_KEY = st.secrets["74474599449143e51fd321d9f4132c28"]
+GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+SERPAPI_KEY = st.secrets["SERPAPI_KEY"]
+IMGBB_API_KEY = st.secrets["IMGBB_API_KEY"]
 
 genai.configure(api_key=GEMINI_API_KEY.strip())
 
